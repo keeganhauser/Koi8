@@ -8,30 +8,7 @@
 #include <stack>
 #include <chrono>
 #include <fstream>
-#include <string>
-
-sf::RectangleShape onRect, offRect;
-constexpr uint32_t window_width = 640;
-constexpr uint32_t window_height = 320;
-constexpr uint32_t tile_size = window_height / 32;
-constexpr uint32_t tiles_x = window_width / tile_size;
-constexpr uint32_t tiles_y = window_height / tile_size;
-
-// sf::RenderWindow window;
-
-void Draw(sf::RenderWindow *window, const uint32_t *graphics_buffer) {
-    for (int x = 0; x < tiles_x; x++) {
-        for (int y = 0; y < tiles_y; y++) {
-            if (graphics_buffer[x + y * 64] == 0) {
-                offRect.setPosition({static_cast<float>(x * tile_size), static_cast<float>(y * tile_size)});
-                window->draw(offRect);
-            } else {
-                onRect.setPosition({static_cast<float>(x * tile_size), static_cast<float>(y * tile_size)});
-                window->draw(onRect);
-            }
-        }
-    }
-}
+#include <unordered_map>
 
 enum class Reg {
     V0 = 0, V1, V2, V3,
@@ -40,30 +17,14 @@ enum class Reg {
     VC, VD, VE, VF
 };
 
-enum class Opcodes : uint16_t {
-    ClearDisplay = 0x00E0,
-};
-
 class Koi8 {
+    typedef void(Koi8::*instruction_func)(void);
+
 public:
-    Koi8() : window(sf::RenderWindow(sf::VideoMode({window_width, window_height}), "CMake SFML Project")), pc(0x200),
-             should_close(false) {
-        window.setFramerateLimit(60);
-
-        onRect.setSize({tile_size, tile_size});
-        onRect.setFillColor(sf::Color(0xbc89ffff));
-        // onRect.setFillColor(sf::Color(188, 137, 255));
-
-        offRect.setSize({tile_size, tile_size});
-        offRect.setFillColor(sf::Color(0x5e4580ff));
-        // offRect.setFillColor(sf::Color(94, 69, 128));
-
-        Initialize();
-        std::cout << "Initialized" << std::endl;
-    }
-
+    Koi8() { Initialize(); }
     ~Koi8() = default;
 
+    // Load a .ch8 file into Koi8's memory
     void LoadROM(const std::filesystem::path &rom_path) {
         std::ifstream rom_file(rom_path, std::ios::binary | std::ios::ate);
 
@@ -83,144 +44,34 @@ public:
         }
     }
 
+    // Update() will fetch and execute the next instruction being pointed at by the program counter.
     void Update() {
         // Decrement timers every second
-        // if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_dec_time) >= std::chrono::milliseconds(1000)) {
-        //     last_dec_time = std::chrono::high_resolution_clock::now();
-        //     sound_timer--;
-        //     delay_timer--;
-        //     std::cout << "dec" << std::endl;
-        // }
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_dec_time) >= std::chrono::milliseconds(1000)) {
+            last_dec_time = std::chrono::high_resolution_clock::now();
+            if (sound_timer > 0) sound_timer--;
+            if (delay_timer > 0) delay_timer--;
+        }
 
         // Fetch
         instruction = memory[pc] << 8 | memory[pc + 1];
         if (instruction == 0) return;
         opcode = instruction >> 12 & 0xF;
 
-        if (instruction != 0) {
-            std::cout << "Instruction: " << std::hex << instruction << std::endl;
-            pc += 2;
-        }
+        pc += 2;
 
-        // Decode
-        switch (opcode) {
-            case 0x0: {
-                switch (instruction) {
-                    case 0x00E0: // Clear screen
-                        Op_ClearScreen();
-                        break;
-                    case 0x00EE: // Return subroutine
-                        Op_ReturnSub();
-                        break;
-                }
-                break;
-            }
-
-            case 0x1:
-                Op_Jump();
-                break;
-
-            case 0x2:
-                Op_GoSubroutine();
-                break;
-
-            case 0x3:
-                Op_SkipEqI();
-                break;
-
-            case 0x4:
-                Op_SkipNeqI();
-                break;
-
-            case 0x5:
-                Op_SkipEqR();
-                break;
-
-            case 0x6:
-                Op_SetRegI();
-                break;
-
-            case 0x7:
-                Op_AddToRegI();
-                break;
-
-            case 0x8: {
-                switch (uint8_t last_nibble = instruction & 0xF) {
-                    case 0x0:
-                        Op_SetRegR();
-                        break;
-
-                    case 0x1:
-                        Op_BitOr();
-                        break;
-
-                    case 0x2:
-                        Op_BitAnd();
-                        break;
-
-                    case 0x3:
-                        Op_BitXor();
-                        break;
-
-                    case 0x4:
-                        Op_AddToRegR();
-                        break;
-
-                    case 0x5:
-                        Op_SubRegs(0);
-                        break;
-
-                    case 0x6:
-                        Op_ShiftRight();
-                        break;
-
-                    case 0x7:
-                        Op_SubRegs(1);
-                        break;
-
-                    case 0xE:
-                        Op_ShiftLeft();
-                        break;
-                }
-                break;
-            }
-
-
-            case 0xA: {
-                idx_reg = instruction & 0x0FFF;
-                break;
-            }
-
-            // Display
-            case 0xD:
-                Op_Draw();
-                break;
-
-            default:
-                break;
+        // Decode & execute
+        try {
+            (this->*(func_table.at(opcode)))();
+        } catch (std::out_of_range &e) {
+            std::cout << "Encountered error trying to execute instruction `" << std::hex << instruction << "`: " << e.what() << std::endl;
         }
     }
 
-    void Run() {
-        while (window.isOpen()) {
-            while (const std::optional event = window.pollEvent()) {
-                if (event->is<sf::Event::Closed>()) {
-                    window.close();
-                }
-            }
-
-            Update();
-
-            window.clear();
-            Draw(&window, graphics_buffer.data());
-            window.display();
-        }
-    }
-
-    const uint32_t *GetGraphicsBuffer() const { return graphics_buffer.data(); }
+    // Retrieves the pointer to the start of the graphics buffer.
+    [[nodiscard]] const uint32_t *GetGraphicsBuffer() const { return graphics_buffer.data(); }
 
 private:
-    sf::RenderWindow window;
     std::array<uint8_t, 4096> memory{};
     std::array<uint32_t, 2048> graphics_buffer{};
     uint16_t pc;
@@ -232,7 +83,6 @@ private:
     std::array<uint8_t, 16> reg_v{};
     std::stack<uint16_t> stack{};
     std::chrono::time_point<std::chrono::high_resolution_clock> last_dec_time;
-    bool should_close;
     const std::array<uint8_t, 80> font_bytes{
         0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
         0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -252,15 +102,72 @@ private:
         0xF0, 0x80, 0xF0, 0x80, 0x80  // F
     };
 
+    const std::unordered_map<uint8_t, instruction_func> func_table = {
+        { 0x0, &Koi8::decode_0_opcode },
+        { 0x1, &Koi8::Op_Jump },
+        { 0x2, &Koi8::Op_GoSubroutine },
+        { 0x3, &Koi8::Op_SkipEqI },
+        { 0x4, &Koi8::Op_SkipNeqI },
+        { 0x5, &Koi8::Op_SkipEqR },
+        { 0x6, &Koi8::Op_SetRegI },
+        { 0x7, &Koi8::Op_AddToRegI },
+        { 0x8, &Koi8::decode_8_opcode },
+        { 0x9, &Koi8::Op_SkipNeqR },
+        { 0xA, &Koi8::Op_SetIdx },
+        { 0xD, &Koi8::Op_Draw },
+        { 0xF, &Koi8::decode_F_opcode },
+    };
+
+    const std::unordered_map<uint8_t, instruction_func> func_0_table = {
+        { 0x0, &Koi8::Op_ClearScreen },
+        { 0xE, &Koi8::Op_ReturnSub }
+    };
+
+    const std::unordered_map<uint8_t, instruction_func> func_8_table = {
+        { 0x0, &Koi8::Op_SetRegR },
+        { 0x1, &Koi8::Op_BitOr },
+        { 0x2, &Koi8::Op_BitAnd },
+        { 0x3, &Koi8::Op_BitXor },
+        { 0x4, &Koi8::Op_AddToRegR },
+        { 0x5, &Koi8::Op_SubXY },
+        { 0x6, &Koi8::Op_ShiftRight },
+        { 0x7, &Koi8::Op_SubYX },
+        { 0xE, &Koi8::Op_ShiftLeft },
+    };
+
+    const std::unordered_map<uint8_t, instruction_func> func_F_table = {
+        { 0x15, &Koi8::Op_SetDelayTimer },
+        { 0x18, &Koi8::Op_SetSoundTimer },
+        { 0x33, &Koi8::Op_BCD },
+        { 0x55, &Koi8::Op_RegDump },
+        { 0x65, &Koi8::Op_RegLoad },
+    };
+
+    void decode_0_opcode() {
+        // Instructions start with 00E, then last nibble decides functionality
+        uint8_t last_nibble = instruction & 0xF;
+        (this->*(func_0_table.at(last_nibble)))();
+    }
+
+    void decode_8_opcode() {
+        // Function changes based off instruction's last nibble
+        uint8_t last_nibble = instruction & 0xF;
+        (this->*(func_8_table.at(last_nibble)))();
+    }
+
+    void decode_F_opcode() {
+        // Function changes based off instruction's last byte
+        uint8_t last_byte = instruction & 0xFF;
+        (this->*(func_F_table.at(last_byte)))();
+    }
 
     void Initialize() {
         // Copy font into memory starting at 0x050
         std::ranges::copy(font_bytes, memory.begin() + 0x050);
         assert(memory[0x050] == font_bytes.front() && memory[0x050 + font_bytes.size()-1] == font_bytes.back());
 
-        // for (int i = 0; i < graphics_buffer.size(); i++) {
-        //     graphics_buffer[i] = i % 2 == 0 ? 1 : 0;
-        // }
+        // Start program counter at 0x200
+        pc = 0x200;
     }
 
     void Op_ClearScreen() {
@@ -307,6 +214,14 @@ private:
         }
     }
 
+    void Op_SkipNeqR() {
+        uint8_t lhs = reg_v[instruction >> 8 & 0x0F];
+        uint8_t rhs = reg_v[instruction >> 4 & 0x0F];
+        if (lhs != rhs) {
+            pc += 2;
+        }
+    }
+
     void Op_SetRegI() {
         reg_v[instruction >> 8 & 0xF] = instruction & 0x00FF;
     }
@@ -344,14 +259,12 @@ private:
         }
     }
 
-    // dir = 0: Vx - Vy
-    // dir = 1: Vy - Vx
-    void Op_SubRegs(uint8_t dir) {
-        uint8_t *Vx = &reg_v[instruction >> 8 & 0xF];
-        uint8_t *Vy = &reg_v[instruction >> 4 & 0xF];
-        uint8_t diff = dir ? *Vy - *Vx : *Vx - *Vy;
-        reg_v[0xF] = dir ? *Vy > *Vx : *Vx > *Vy;
-        *Vx = diff;
+    void Op_SubXY() {
+        reg_v[instruction >> 8 & 0xF] -= reg_v[instruction >> 4 & 0xF];
+    }
+
+    void Op_SubYX() {
+        reg_v[instruction >> 8 & 0xF] = reg_v[instruction >> 4 & 0xF] - reg_v[instruction >> 8 & 0xF];
     }
 
     void Op_ShiftLeft() {
@@ -362,6 +275,10 @@ private:
     void Op_ShiftRight() {
         reg_v[0xF] = reg_v[instruction >> 8 & 0xF] & 0x1; // Grab the least significant bit and store it in VF
         reg_v[instruction >> 8 & 0x0F] >>= 1;
+    }
+
+    void Op_SetIdx() {
+        idx_reg = instruction & 0x0FFF;
     }
 
     void Op_Draw() {
@@ -387,6 +304,35 @@ private:
             }
         }
 
+    }
+
+    void Op_SetDelayTimer() {
+        delay_timer = reg_v[instruction >> 8 & 0xF];
+    }
+
+    void Op_SetSoundTimer() {
+        sound_timer = reg_v[instruction >> 8 & 0xF];
+    }
+
+    void Op_BCD() {
+        uint8_t val = reg_v[instruction >> 8 & 0xF];
+        for (int i = 2; i >= 0; i--, val /= 10) {
+            memory[idx_reg + i] = val % 10;
+        }
+    }
+
+    void Op_RegDump() {
+        uint8_t last_reg = instruction >> 8 & 0xF;
+        for (uint8_t i = 0; i <= last_reg; i++) {
+            memory[idx_reg + i] = reg_v[i];
+        }
+    }
+
+    void Op_RegLoad() {
+        uint8_t last_reg = instruction >> 8 & 0xF;
+        for (uint8_t i = 0; i <= last_reg; i++) {
+            reg_v[i] = memory[idx_reg + i];
+        }
     }
 };
 
