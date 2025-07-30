@@ -24,11 +24,13 @@ void Draw(sf::RenderWindow *window, const uint32_t *graphics_buffer) {
 
 int main() {
     Koi8 koi8;
-    koi8.LoadROM("../test-roms/IBM Logo.ch8");
+    // koi8.LoadROM("../test-roms/IBM Logo.ch8");
     // koi8.LoadROM("../test-roms/test_opcode.ch8");
+    // koi8.LoadROM("../test-roms/test_opcode_corax+.ch8");
+    koi8.LoadROM("../test-roms/test_flags.ch8");
 
     sf::RenderWindow window(sf::VideoMode({window_width, window_height}), "Koi8");
-    window.setFramerateLimit(60);
+    window.setFramerateLimit(144);
 
     onRect.setSize({tile_size, tile_size});
     onRect.setFillColor(sf::Color(0xbc89ffff));
@@ -42,6 +44,12 @@ int main() {
         while (const std::optional event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) {
                 window.close();
+            }
+
+            else if (const auto *key_pressed = event->getIf<sf::Event::KeyPressed>()) {
+                if (key_pressed->scancode == sf::Keyboard::Scancode::Escape) {
+                    window.close();
+                }
             }
         }
 

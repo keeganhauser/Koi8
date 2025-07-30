@@ -10,13 +10,6 @@
 #include <fstream>
 #include <unordered_map>
 
-enum class Reg {
-    V0 = 0, V1, V2, V3,
-    V4, V5, V6, V7,
-    V8, V9, VA, VB,
-    VC, VD, VE, VF
-};
-
 class Koi8 {
     typedef void(Koi8::*instruction_func)(void);
 
@@ -138,6 +131,7 @@ private:
     const std::unordered_map<uint8_t, instruction_func> func_F_table = {
         { 0x15, &Koi8::Op_SetDelayTimer },
         { 0x18, &Koi8::Op_SetSoundTimer },
+        { 0x1E, &Koi8::Op_AddIdxR },
         { 0x33, &Koi8::Op_BCD },
         { 0x55, &Koi8::Op_RegDump },
         { 0x65, &Koi8::Op_RegLoad },
@@ -260,21 +254,31 @@ private:
     }
 
     void Op_SubXY() {
-        reg_v[instruction >> 8 & 0xF] -= reg_v[instruction >> 4 & 0xF];
+        uint8_t *Vx = &reg_v[instruction >> 8 & 0xF];
+        uint8_t Vy = reg_v[instruction >> 4 & 0xF];
+        uint8_t Vf = *Vx >= Vy;
+        *Vx -= Vy;
+        reg_v[0xF] = Vf;
     }
 
     void Op_SubYX() {
-        reg_v[instruction >> 8 & 0xF] = reg_v[instruction >> 4 & 0xF] - reg_v[instruction >> 8 & 0xF];
+        uint8_t *Vx = &reg_v[instruction >> 8 & 0xF];
+        uint8_t Vy = reg_v[instruction >> 4 & 0xF];
+        uint8_t Vf = Vy >= *Vx;
+        *Vx = Vy - *Vx;
+        reg_v[0xF] = Vf;
     }
 
     void Op_ShiftLeft() {
-        reg_v[0xF] = reg_v[instruction >> 8 & 0xF] >> 7; // Grab the most significant bit and store it in VF
+        uint8_t shifted_bit = reg_v[instruction >> 8 & 0xF] >> 7;
         reg_v[instruction >> 8 & 0xF] <<= 1;
+        reg_v[0xF] = shifted_bit;
     }
 
     void Op_ShiftRight() {
-        reg_v[0xF] = reg_v[instruction >> 8 & 0xF] & 0x1; // Grab the least significant bit and store it in VF
+        uint8_t shifted_bit = reg_v[instruction >> 8 & 0xF] & 0x1;
         reg_v[instruction >> 8 & 0x0F] >>= 1;
+        reg_v[0xF] = shifted_bit;
     }
 
     void Op_SetIdx() {
@@ -312,6 +316,10 @@ private:
 
     void Op_SetSoundTimer() {
         sound_timer = reg_v[instruction >> 8 & 0xF];
+    }
+
+    void Op_AddIdxR() {
+        idx_reg += reg_v[instruction >> 8 & 0xF];
     }
 
     void Op_BCD() {
